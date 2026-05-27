@@ -4,9 +4,10 @@ import json
 import os
 import shutil
 import subprocess
+import hashlib
 from pathlib import Path
 
-from .core import verify_claim
+from .core import _diff_hunks, _diff_text, verify_claim
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,12 +66,16 @@ def _build_sample(name: str, changes: dict[str, str], reviewed_files: list[str])
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", f"{name} change")
     head_ref = _git(repo, "rev-parse", "HEAD")
+    diff_text = _diff_text(repo, base_ref, head_ref)
+    hunk_ids = _diff_hunks(diff_text)
 
     claim = {
         "repo_path": str(repo),
         "base_ref": base_ref,
         "head_ref": head_ref,
+        "diff_sha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
         "reviewed_files": reviewed_files,
+        "reviewed_hunks": [hunk for hunk in hunk_ids if hunk.split(":", 1)[0] in reviewed_files],
         "findings": [
             {
                 "file": path,

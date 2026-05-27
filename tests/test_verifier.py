@@ -6,9 +6,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 
-from verifier.core import verify_claim
+from verifier.core import _diff_hunks, _diff_text, verify_claim
 
 
 class ReviewCoverageVerifierTests(unittest.TestCase):
@@ -36,6 +37,8 @@ class ReviewCoverageVerifierTests(unittest.TestCase):
 
         self.assertEqual(result.status, "ACCEPT")
         self.assertEqual(result.missing_files, [])
+        self.assertEqual(result.missing_hunks, [])
+        self.assertTrue(result.diff_sha256_matches)
         self.assertEqual(result.invalid_findings, [])
 
     def test_rejects_missing_changed_file(self) -> None:
@@ -47,6 +50,7 @@ class ReviewCoverageVerifierTests(unittest.TestCase):
 
         self.assertEqual(result.status, "REJECT")
         self.assertEqual(result.missing_files, ["config.yml"])
+        self.assertTrue(result.missing_hunks)
         self.assertIn("review did not cover every changed file", result.reasons)
 
     def test_rejects_finding_on_unchanged_file(self) -> None:
@@ -59,6 +63,30 @@ class ReviewCoverageVerifierTests(unittest.TestCase):
 
         self.assertEqual(result.status, "REJECT")
         self.assertEqual(result.invalid_findings[0]["file"], "README.md")
+
+    def test_rejects_unexpected_reviewed_file(self) -> None:
+        self._write("app.py", "print('ok')\n")
+        self._commit("head")
+        claim = self._claim(["app.py"])
+        claim["reviewed_files"].append("README.md")
+
+        result = verify_claim(claim)
+
+        self.assertEqual(result.status, "REJECT")
+        self.assertEqual(result.unexpected_files, ["README.md"])
+        self.assertIn("reviewed_files contains files outside the diff", result.reasons)
+
+    def test_rejects_tampered_diff_hash(self) -> None:
+        self._write("app.py", "print('ok')\n")
+        self._commit("head")
+        claim = self._claim(["app.py"])
+        claim["diff_sha256"] = "0" * 64
+
+        result = verify_claim(claim)
+
+        self.assertEqual(result.status, "REJECT")
+        self.assertFalse(result.diff_sha256_matches)
+        self.assertIn("claimed diff_sha256 does not match the current git diff", result.reasons)
 
     def test_rejects_review_without_findings(self) -> None:
         self._write("app.py", "print('ok')\n")
@@ -82,11 +110,16 @@ class ReviewCoverageVerifierTests(unittest.TestCase):
 
     def _claim(self, reviewed_files: list[str]) -> dict[str, object]:
         head_ref = self._git("rev-parse", "HEAD")
+        diff_text = _diff_text(self.repo, self.base_ref, head_ref)
+        hunk_ids = _diff_hunks(diff_text)
+        reviewed_hunks = [hunk for hunk in hunk_ids if hunk.split(":", 1)[0] in reviewed_files]
         return {
             "repo_path": str(self.repo),
             "base_ref": self.base_ref,
             "head_ref": head_ref,
+            "diff_sha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
             "reviewed_files": reviewed_files,
+            "reviewed_hunks": reviewed_hunks,
             "findings": [
                 {"file": path, "summary": f"Reviewed {path}", "severity": "low"}
                 for path in reviewed_files

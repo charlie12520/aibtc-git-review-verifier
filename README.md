@@ -2,9 +2,9 @@
 
 This is a narrow trustless verifier for one agent task class:
 
-> Claim: "This code review covered every file changed between git commit A and commit B."
+> Claim: "This code review covered every file and changed hunk between git commit A and commit B."
 
-The verifier deterministically re-runs `git diff --name-only A..B`, compares the changed files with the files the review claims to cover, and returns `ACCEPT` or `REJECT` with structured reasons.
+The verifier deterministically re-runs `git diff` between the two refs, checks the SHA-256 of the exact diff, compares the changed files and changed hunks with the review's claimed coverage, and returns `ACCEPT` or `REJECT` with structured reasons.
 
 ## Why This Fits Agent Work
 
@@ -12,7 +12,7 @@ Agent marketplaces often pay for PR reviews, bug triage, or patch audits. A huma
 
 > Did the review artifact even cover the full changed surface?
 
-That catches a common failure mode: an agent leaves a plausible review while skipping changed files.
+That catches a common failure mode: an agent leaves a plausible review while skipping changed files or specific hunks inside a file.
 
 ## Trust Model
 
@@ -23,7 +23,7 @@ Trust assumptions:
 - The verifier trusts the local git repository and commit objects it is given.
 - It trusts `git diff --name-only` to compute the changed-file set.
 - It does not trust the review claim. The claim is checked against the commit diff.
-- It does not prove semantic review quality. It proves changed-file coverage and finding references.
+- It does not prove semantic review quality. It proves changed-file coverage, changed-hunk coverage, and finding references.
 
 No private data, oracle, TEE, or model provider is required.
 
@@ -32,7 +32,7 @@ No private data, oracle, TEE, or model provider is required.
 Expected verification cost per task:
 
 - Network: 0 sats if the repo is already cloned.
-- Compute: one `git diff --name-only` call plus JSON parsing.
+- Compute: one `git diff --name-only` call, one zero-context `git diff` call, hunk extraction, and JSON parsing.
 - Typical wall-clock time on the included samples: under 1 second.
 
 This is well below 100 sats per verification.
@@ -44,7 +44,9 @@ This is well below 100 sats per verification.
   "repo_path": "path/to/git/repo",
   "base_ref": "BASE_COMMIT_OR_REF",
   "head_ref": "HEAD_COMMIT_OR_REF",
+  "diff_sha256": "sha256 of git diff --no-ext-diff --unified=0 base..head",
   "reviewed_files": ["app.py", "README.md"],
+  "reviewed_hunks": ["app.py:-1 +1,2", "README.md:-0,0 +1"],
   "findings": [
     {
       "file": "app.py",
@@ -82,5 +84,4 @@ The demo creates local git repositories and verifies four samples:
 - `accept_basic`: one-file change, review covers that file.
 - `accept_multifile`: two-file change, review covers both files.
 - `accept_docs_and_code`: code plus docs change, review covers both.
-- `reject_missing_file`: two-file change, review covers only one file, so it rejects.
-
+- `reject_missing_file`: two-file change, review covers only one file and one hunk, so it rejects.
